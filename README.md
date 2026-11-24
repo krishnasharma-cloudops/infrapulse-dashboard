@@ -1,284 +1,435 @@
-# InfraPulse Dashboard — Beginner Step-by-Step Guide
+# InfraPulse — Dashboard UI
 
-**Repository 3 of 3.** The frontend is the part of the application visible in the browser. React builds the user interface (UI), TypeScript adds types to JavaScript, CSS controls the design, and Vite provides a local development server and build tool. Nginx is an optional static web server; it is not required for the first run.
+## Azure VM Deployment Guide (Nginx)
 
-## Understanding the project from scratch
+A step-by-step guide to build and host the **InfraPulse Dashboard** on an Azure Ubuntu VM using **Node.js**, **React**, **TypeScript**, **Vite**, and **Nginx**, with static hosting under `/var/www/html`.
 
-InfraPulse is a server monitoring application. The database stores data, the backend reads and writes data, and the frontend displays data in the browser. The agent sends CPU (processor usage), RAM (memory usage), and disk (storage usage) metrics.
+The dashboard displays server health, CPU, memory and disk utilization, historical metrics, and resource alerts. It retrieves data from the InfraPulse Query Service (FastAPI), not directly from the database.
 
-```text
-Agent --> FastAPI --> PostgreSQL
-Browser --> React/Vite --> FastAPI --> PostgreSQL
-```
+---
 
-| Order | Repository | Port | Purpose |
-|---|---|---|---|
-| 1 | infrapulse-database | 5432 | Data storage |
-| 2 | infrapulse-query-service | 8000 | API |
-| 3 | infrapulse-query-service (agent) | No listening port | Sends metrics |
-| 4 | infrapulse-dashboard | 5173 | Browser UI |
-
-**Important:** This guide uses the Bash terminal on Ubuntu 24.04 / Ubuntu WSL as the primary environment. Native Windows instructions are also provided below. If you use WSL, install the database, Python, and Node.js inside WSL; do not mix Windows and WSL commands. Internet access is required for initial software installation. `localhost` means your own computer. A port is a numbered connection point for a service. Copy only the commands from the code blocks, not the output or terminal prompt. Run the next command only after the previous one succeeds.
-
-### Folder setup
-
-Extract all three ZIP files into the same `InfraPulse` folder. On Ubuntu/WSL, this guide assumes the path is `~/InfraPulse`. The `~` symbol represents your home directory. If the ZIP files are in Downloads, use the file manager to extract them into the InfraPulse folder in your home directory. In WSL, `explorer.exe .` opens the current Linux folder in Windows Explorer.
-
-```bash
-mkdir -p ~/InfraPulse
-cd ~/InfraPulse
-pwd
-ls -a
-```
-
-`mkdir -p` creates a directory without raising an error if it already exists, `cd` changes the current directory, `pwd` displays the current path, and `ls -a` lists the contents, including hidden files. After extraction, the folder structure should look like this:
+## Deployment Architecture
 
 ```text
-InfraPulse/
-  infrapulse-database/
-  infrapulse-query-service/
-  infrapulse-dashboard/
+Browser
+   |
+   | HTTP :80
+   v
+Azure Frontend VM (Nginx + React static files)
+   |
+   | Private HTTP :8000 (/api/ reverse proxy)
+   v
+Azure Backend VM (FastAPI Query Service)
+   |
+   | PostgreSQL :5432 (TLS)
+   v
+Azure Database for PostgreSQL Flexible Server
 ```
 
-On native Windows, use `$HOME\InfraPulse` in PowerShell instead of `C:\Users\YOUR_NAME\InfraPulse`. Use Extract All to extract the ZIP files into this folder. Avoid creating duplicate nested folders.
+### Prerequisites
 
-## 1. Check whether the first two repositories are running
+- An Azure Ubuntu VM for the dashboard (Ubuntu 24.04 LTS recommended).
+- A public IP for the frontend VM and SSH access from your computer.
+- A running InfraPulse Query Service on a separate backend VM, listening on port `8000` on its private network interface.
+- Network connectivity between the frontend and backend VMs (for example, within the same Azure virtual network).
+- A working database connection and metrics collector on the backend side.
+- Your `infrapulse-dashboard` repository uploaded to GitHub.
+- Outbound internet connectivity from the frontend VM for Git and npm downloads.
 
-Open http://localhost:8000/health/ready in your browser. The expected response is `{"status":"ready"}`. At http://localhost:8000/api/v1/servers, you should see a JSON array containing demo servers. If not, follow the database and backend README files. Check the agent terminal for HTTP 201 logs. The frontend does not connect directly to the database.
+Deploy the database first, then the backend, and finally this dashboard. This guide assumes the first two components are already running.
 
-## 2. Install Node.js (Terminal 4)
+Replace the following placeholders throughout the guide with your own values. Do not type the angle brackets literally.
 
-Node.js 22 LTS is the recommended version for this guide. For Ubuntu/WSL, visit the official https://nodejs.org/en/download page, select Node.js 22, and follow the Linux installation instructions. For native Windows, download and run the Node.js 22 Windows installer from the same page, then open a new PowerShell terminal. npm is included with Node.js. Verify the installation:
-
-```bash
-node --version
-npm --version
-```
-
-The expected Node.js version is `v22.x.x`, along with an npm version number. If you receive a command-not-found error, check the installation and PATH. Avoid using an older Node.js version supplied by the Ubuntu distribution.
-
-## 3. Open the dashboard folder and install packages
-
-```bash
-cd ~/InfraPulse/infrapulse-dashboard
-ls -a
-npm install
-```
-
-In Windows PowerShell, use `cd "$HOME\InfraPulse\infrapulse-dashboard"` and `Get-ChildItem -Force`; the npm command remains the same. If the PowerShell script execution policy blocks npm.ps1, use `npm.cmd install` and subsequently `npm.cmd run dev` / `npm.cmd run build`.
-
-`package.json` lists the dependencies and scripts. `npm install` downloads the dependencies and creates the `node_modules` folder and `package-lock.json`. Internet access is required. Do not upload `node_modules` to GitHub. You can commit the lockfile after a successful installation. Review any audit warnings; do not blindly run `npm audit fix --force`.
-
-## 4. Start the frontend
-
-```bash
-npm run dev
-```
-
-This runs the dev script defined in package.json. The expected Vite output includes `Local: http://127.0.0.1:5173/` or a similar localhost URL. Open http://localhost:5173 in your browser. If the port is busy, open the actual URL printed by Vite. Keep this terminal running. If you use VS Code, you can open a separate terminal using Terminal > New Terminal.
-
-### How many terminals are running now?
-
-| Terminal | Process | Can it be closed? |
+| Placeholder | Meaning | Example |
 |---|---|---|
-| 1 | PostgreSQL service setup | You may exit the SQL shell; keep the service running |
-| 2 | Uvicorn API | No |
-| 3 | Demo or real agent | No |
-| 4 | Vite dashboard | No |
+| `<FRONTEND_PUBLIC_IP>` | Public IP of the dashboard VM | Your Azure VM public IP |
+| `<BACKEND_PRIVATE_IP>` | Private IP of the Query Service VM | `10.0.2.4` |
+| `<YOUR_GITHUB_USERNAME>` | Your GitHub account name | `your-username` |
+| `azureuser` | VM SSH username | Change if you selected another username |
 
-## 5. What to look for in the dashboard
+---
 
-- API connected: Data is being received from the backend.
-- Total servers: The database inventory count. A fresh demo has 3 servers; manual tests may add more servers.
-- Online: The latest sample is recent and resource usage is below the threshold.
-- Warning: At least one resource in a recent sample has usage of 85% or higher (default).
-- Offline: The sample is missing or older than 120 seconds.
-- Average CPU: The mean CPU usage of reporting servers; offline servers are excluded.
-- Resource utilization: Select a server from the dropdown and choose 1h/6h/24h/7 days. Up to the latest 2,000 points are displayed.
-- Server inventory: Search by hostname or region; click a hostname to display that server's graph.
-- Resource alerts: Use the Include resolved checkbox to view recovered alerts.
-- Refresh / Pause polling: Refresh manually or pause/resume the automatic 10-second refresh.
+## 1. Open Port 80 in Azure NSG
 
-The demo-db-01 server has 91% disk usage, so a warning is expected. If you stop the demo agent and wait more than 120 seconds, the demo servers may appear offline. Restart the agent to receive fresh data. Actual values vary according to the synthetic demo data.
+To allow HTTP traffic to the dashboard:
 
-## 6. How does data travel through the application?
+1. Open the [Azure Portal](https://portal.azure.com/).
+2. Navigate to **Virtual Machines** and select your frontend VM.
+3. Open **Networking > Network settings**, or open its associated Network Security Group (NSG).
+4. Under **Inbound port rules**, select **Add inbound rule** and enter:
 
-`src/api.ts` fetches the relative URL `/api/v1/servers`. `vite.config.ts` forwards `/api` requests to `http://localhost:8000` using a reverse proxy. FastAPI retrieves data from PostgreSQL and returns JSON. React updates its state and renders the UI. The database password is not provided to the browser. Because of this proxy, CORS configuration is not required for local development.
+   | Setting | Value |
+   |---|---|
+   | Source | IP Addresses — your laptop's public IP with `/32` |
+   | Source port ranges | `*` |
+   | Destination | Any |
+   | Destination port ranges | `80` |
+   | Protocol | TCP |
+   | Action | Allow |
+   | Priority | `1010` (or an unused priority before any matching deny rule) |
+   | Name | `Allow-HTTP-80` |
 
-## 7. Purpose of each file
+5. Ensure port `22` (SSH) is also allowed from your laptop's public IP.
+6. On the backend VM's NSG, allow TCP port `8000` from the frontend VM's private IP (for example, `10.0.1.4/32`). Do not expose port `8000` directly to the internet.
 
-| File | Purpose |
-|---|---|
-| src/App.tsx | UI, cards, graph, server table, alerts, and polling |
-| src/api.ts | TypeScript data types and API fetch function |
-| src/main.tsx | Mounts the React application into the HTML root |
-| src/style.css | Colors, spacing, and responsive layout |
-| index.html | Browser page entry point |
-| package.json | npm dependencies and scripts |
-| tsconfig.json | TypeScript compiler settings |
-| vite.config.ts | Development server API proxy |
-| nginx.conf | Optional web server configuration |
-| .gitignore, LICENSE, README.md | Git exclusions, license, and guide |
+**Why?** An NSG controls which network connections are allowed to reach an Azure resource. Nginx listens on port 80 and communicates with FastAPI on port 8000 over the private network.
 
-## 8. Production build (optional)
+**Security:** Keep this deployment restricted to your IP. The current application's read APIs do not implement user authentication. Configure authentication and HTTPS before making the dashboard available publicly. Opening port 443 alone does not configure HTTPS.
 
-Open a new terminal and run the following commands from the dashboard folder:
+---
+
+## 2. Connect to the Azure VM
+
+Open Git Bash, PowerShell, or a terminal on your local computer. Connect to the **frontend VM** using its public IP:
 
 ```bash
-npm run build
-ls dist
+ssh azureuser@<FRONTEND_PUBLIC_IP>
 ```
 
-The build script first checks TypeScript using `tsc --noEmit`, then creates optimized static files using `vite build`. The expected output includes `dist/index.html` and the `dist/assets/` directory. On Windows, use `Get-ChildItem dist`. The build output is not an API server. Do not treat `npm run preview` as a substitute for complete backend integration; production serving requires proxy configuration.
+If your VM uses an SSH private key stored outside the default SSH directory:
 
-### Optional Nginx (Ubuntu/WSL only)
+```bash
+ssh -i /path/to/private-key azureuser@<FRONTEND_PUBLIC_IP>
+```
 
-Vite is sufficient for local practice. If you want to try Nginx, keep the backend running on port 8000 and run these commands after building the frontend:
+Verify the server identity before accepting a first-time SSH host key. After login, run:
+
+```bash
+whoami
+hostname
+pwd
+```
+
+These commands display your username, VM hostname, and current directory. All remaining Linux commands in this guide must be executed on the frontend VM, not on your laptop or backend VM.
+
+---
+
+## 3. Install Node.js and npm (v22 LTS)
+
+Update the Ubuntu package index and install the required utilities:
 
 ```bash
 sudo apt update
-sudo apt install -y nginx
-sudo mkdir -p /var/www/infrapulse
-sudo cp -r dist/. /var/www/infrapulse/
-sudo cp nginx.conf /etc/nginx/sites-available/infrapulse
-sudo ln -s /etc/nginx/sites-available/infrapulse /etc/nginx/sites-enabled/infrapulse
-sudo nginx -t
-sudo service nginx start
-sudo service nginx reload
+sudo apt install -y curl git ca-certificates
 ```
 
-`mkdir` creates the web root, `cp` copies the built files and configuration, and `ln -s` enables the configuration (if the link already exists, verify it). `nginx -t` checks the configuration syntax; reload only if this check succeeds. Open http://localhost:8080 in your browser. The included configuration proxies `/api/` requests to 127.0.0.1:8000. The sample configuration listens on all interfaces. For a strictly local lab, change `listen 8080;` to `listen 127.0.0.1:8080;` in the copied configuration before enabling it. Do not expose it to the public internet; the API read endpoints are not authenticated. If Nginx conflicts with the default site on port 80, review the service logs rather than deleting unrelated configuration.
+Use Node.js 22, the version recommended for this InfraPulse project. Download the NodeSource setup script:
 
-## 9. Common errors
-
-| Error | Solution |
-|---|---|
-| npm not found | Check the Node.js installation and PATH |
-| package.json not found | Use `cd` to enter the correct dashboard root directory |
-| API unavailable / 503 | Check the backend health URL and database service |
-| ECONNREFUSED | Verify that the API is running on port 8000 and check the Vite proxy configuration |
-| Blank screen | Check the browser console (F12) and Vite terminal errors |
-| No servers | Start the demo agent / verify the database seed data |
-| Port in use | Open the URL printed by Vite; keep backend port 8000 unchanged |
-| npm network error | Check internet, proxy, or registry access and retry installation |
-
-## 10. Daily startup and shutdown (no need to repeat installation)
-
-After restarting your computer on Ubuntu/WSL:
-
-**Terminal 1**
 ```bash
-sudo service postgresql start
-pg_isready -h localhost -p 5432
+curl -fsSL https://deb.nodesource.com/setup_22.x -o /tmp/nodesource_setup.sh
 ```
 
-**Terminal 2**
+Review the downloaded script before running it with administrator privileges:
+
 ```bash
-cd ~/InfraPulse/infrapulse-query-service
-source .venv/bin/activate
-python -m uvicorn app.main:app --env-file .env --host 127.0.0.1 --port 8000
+less /tmp/nodesource_setup.sh
 ```
 
-**Terminal 3**
+Press `q` to exit the viewer. Then run:
+
 ```bash
-cd ~/InfraPulse/infrapulse-query-service
-source .venv/bin/activate
-python -c "from dotenv import load_dotenv; load_dotenv(); from agent.demo import main; main()"
+sudo bash /tmp/nodesource_setup.sh
+sudo apt install -y nodejs
 ```
 
-**Terminal 4**
+Alternatively, follow the Linux instructions for Node.js 22 at [nodejs.org/en/download](https://nodejs.org/en/download).
+
+Verify the installation:
+
 ```bash
-cd ~/InfraPulse/infrapulse-dashboard
-npm run dev
+node -v
+npm -v
+git --version
 ```
 
-On native Windows, check that PostgreSQL is running in the Services app. For the backend and agent commands, use the PowerShell paths and executables described in their respective README files. Open http://localhost:5173 in your browser. You do not need to repeat database creation, seed data insertion, pip install, or npm install every day. To stop the application, press Ctrl+C in the Vite, agent, and API terminals, in that order. Optionally, stop the local PostgreSQL service using `sudo service postgresql stop` only if no other application is using it. Data will persist in the database. If you used Nginx, you may optionally run `sudo service nginx stop`.
+Expected: Node.js `v22.x.x` and valid npm and Git version numbers. npm is installed with Node.js and manages the frontend libraries.
 
-## 11. Final acceptance checklist
+---
 
-- [ ] Verified the 3 database tables and demo rows.
-- [ ] Confirmed API readiness and Swagger accessibility.
-- [ ] Confirmed that the agent sends samples with HTTP 201 responses.
-- [ ] Confirmed that the dashboard is connected to the API and displays server data.
-- [ ] Completed the manual high CPU and recovery test successfully.
-- [ ] Completed the optional npm run build successfully.
-- [ ] Captured an actual dashboard screenshot and pushed the source code to GitHub without exposing secrets.
+## 4. Clone the Repository
 
-## Upload to GitHub (optional for running the application)
-
-On Ubuntu, install Git using `sudo apt install -y git`. On Windows, install Git from https://git-scm.com/downloads. Verify using `git --version`. Create a new repository on GitHub.com using the exact name of this repository. Do not initialize it with a README or license. Check for secrets before making it public.
+Go to your home directory and clone your dashboard repository:
 
 ```bash
-git config --global user.name "Your Name"
-git config --global user.email "your-email@example.com"
-git init -b main
-git add .
-git status --short
-git commit -m "Initial InfraPulse project"
-git remote add origin https://github.com/YOUR_USERNAME/infrapulse-dashboard.git
-git push -u origin main
-```
-
-Run these commands **inside the root folder of this repository**. Replace `YOUR_USERNAME` with your GitHub username and use this repository's name for `REPO_NAME` where applicable. `git init` creates a local repository, `add` stages files, `status` lets you review them, `commit` creates a snapshot, `remote` connects the GitHub URL, and `push` uploads the code. For HTTPS authentication, use Git Credential Manager/browser login or a GitHub token, not your account password. Do not upload `.env`, database dumps, `.venv`, `node_modules`, or `dist`; `.gitignore` excludes these. If you see a secret in `git status`, remove it before committing. If a remote already exists, check `git remote -v`; do not blindly initialize or push again.
-
-## Verification note
-
-The commands were reviewed against the source configuration. Live database testing, dependency installation, and end-to-end browser testing were not performed in the packaging environment. The expected results described in this guide are acceptance checks, not actual test results. Local lab credentials are examples. Configure authentication, HTTPS, and secure secrets before allowing public access.
-
-## Publish this repository to GitHub using Git clone (optional)
-
-These instructions are for publishing the supplied source code to your own GitHub account, not for running the application. Publish each repository separately.
-
-1. Install Git (`sudo apt install -y git` on Ubuntu, or https://git-scm.com/downloads on Windows). Verify with `git --version`.
-2. Open https://github.com/new and create an empty repository named `infrapulse-dashboard`. Do not initialize it with a README, license or .gitignore. Choose public or private visibility as appropriate.
-3. Configure your Git identity once, using your own name and email.
-
-```bash
-git config --global user.name "Your Name"
-git config --global user.email "your-email@example.com"
-```
-
-4. Clone into a separate publishing directory so that it does not conflict with your extracted source folder. Replace `YOUR_USERNAME` with your GitHub username.
-
-```bash
-mkdir -p ~/InfraPulse-publish
-cd ~/InfraPulse-publish
-git clone https://github.com/YOUR_USERNAME/infrapulse-dashboard.git
+cd ~
+git clone https://github.com/<YOUR_GITHUB_USERNAME>/infrapulse-dashboard.git
 cd infrapulse-dashboard
+ls -la
 ```
 
-An empty-repository warning is normal for a newly created repository. Copy the contents of the supplied source directory into this cloned directory, including hidden files such as `.gitignore` and `.env.example` where present. Do not replace the cloned `.git` directory. Do not copy actual secrets, database dumps, virtual environments, dependencies or build output.
+You should see `package.json`, `src/`, `index.html`, `vite.config.ts`, `nginx.conf`, and `README.md`.
 
-5. Check the files and the destination repository before staging and committing.
+If you have already cloned the repository, enter its directory instead and use `git pull --ff-only` to retrieve updates. Do not clone into an existing nonempty directory.
+
+---
+
+## 5. Verify the Backend API Endpoint
+
+From the frontend VM, check whether the backend is reachable using its **private IP**. Replace the example IP below if your backend has a different address.
 
 ```bash
-git remote -v
-git status
-git add .
-git status --short
+curl --fail --show-error http://10.0.2.4:8000/health/ready
 ```
 
-`git clone` automatically configures the remote named `origin`; no `git init` or `git remote add` is necessary. `git add` stages files; `git status` lets you review them. Remove any staged secrets before committing.
+Expected response:
+
+```json
+{"status":"ready"}
+```
+
+Check the server inventory endpoint:
 
 ```bash
-git commit -m "Initial InfraPulse project"
-git branch -M main
-git push -u origin main
+curl --fail --show-error http://10.0.2.4:8000/api/v1/servers
 ```
 
-`git commit` records a snapshot, `git branch -M main` names the branch, and `git push` uploads the commit and sets the upstream branch. Authenticate using the browser/Git Credential Manager or a GitHub token, not your account password. Refresh the GitHub repository page and confirm the source files and README are present.
+Expected: a JSON array of servers (which may be empty if no metrics have been received).
 
-For an existing cloned repository, replace its README.md and run only:
+### How InfraPulse connects to its API
+
+Unlike the NextOps reference dashboard, InfraPulse uses relative API URLs. In `src/api.ts`, the fetch request is:
+
+```typescript
+fetch('/api/v1' + path, { signal, cache: 'no-store' });
+```
+
+For Azure deployment, Nginx forwards these `/api/` requests to the backend VM. Therefore:
+
+- No frontend `.env` file or `VITE_API_BASE_URL` is required.
+- No changes to `src/api.ts` or `vite.config.ts` are required.
+- The backend does not need a public IP.
+- Browser requests use the same origin as the dashboard, so no additional CORS configuration is needed for this setup.
+
+If the readiness check fails, fix the backend service, database connectivity, or NSG rules before continuing.
+
+---
+
+## 6. Install Dependencies and Build
+
+Inside `~/infrapulse-dashboard`, run:
 
 ```bash
-git status
-git add README.md
-git commit -m "Improve English setup documentation"
-git push
+npm install
 ```
 
-Never commit `.env`, real passwords, tokens, private SSH keys, database dumps, `.venv`, `node_modules` or `dist`. Review the staged file list even when `.gitignore` is present.
+This reads `package.json` and downloads React, TypeScript, Vite, and other dependencies into `node_modules`.
 
-## Verification and security note
+Create the production build:
 
-The instructions describe the supplied source configuration and expected acceptance results. They are not a claim that a live database, dependency installation or end-to-end browser deployment has been executed. The sample credentials are for a private local lab. Configure authentication, HTTPS and secure secrets before any public deployment. Read API endpoints do not currently require authentication.
+```bash
+npm run build
+```
+
+The build first checks TypeScript and then compiles the frontend into optimized static files under `dist/`.
+
+Verify the build output:
+
+```bash
+ls -la dist
+```
+
+Expected: `index.html` and an `assets/` directory. If the build fails, resolve the reported errors before copying the files. The production deployment does not need `npm run dev` or a running Node.js server.
+
+---
+
+## 7. Install Nginx
+
+Install and start the Nginx web server:
+
+```bash
+sudo apt install -y nginx
+sudo systemctl enable --now nginx
+sudo systemctl status nginx --no-pager
+```
+
+Expected service status: `active (running)`.
+
+Nginx will serve the static React dashboard and forward API requests to the backend. Enabling the service makes it start automatically after a VM reboot.
+
+---
+
+## 8. Copy Build Artifacts to `/var/www/html`
+
+Run these commands from the dashboard repository root:
+
+```bash
+cd ~/infrapulse-dashboard
+sudo mkdir -p /var/www/html
+sudo cp -r dist/. /var/www/html/
+ls -la /var/www/html
+```
+
+The `dist/.` syntax copies all contents of the production build directory, including hidden entries if present. The web root must contain `index.html` and `assets/` directly, not an extra `dist` directory.
+
+On a fresh, dedicated VM, the default Nginx placeholder file can optionally be removed:
+
+```bash
+sudo rm -f /var/www/html/index.nginx-debian.html
+```
+
+Do not delete an existing website or unrelated files from a shared server.
+
+---
+
+## 9. Configure Nginx Reverse Proxy
+
+The repository's included `nginx.conf` is intended for local development-style hosting on port 8080 with a local backend. For this Azure deployment, create a site configuration using port 80, `/var/www/html`, and the backend VM's private IP.
+
+```bash
+sudo nano /etc/nginx/sites-available/infrapulse
+```
+
+Paste the following configuration. Replace `10.0.2.4` with the actual backend private IP if necessary:
+
+```nginx
+server {
+    listen 80;
+    server_name _;
+
+    root /var/www/html;
+    index index.html;
+
+    add_header X-Content-Type-Options nosniff always;
+    add_header X-Frame-Options DENY always;
+
+    location / {
+        try_files $uri $uri/ /index.html;
+    }
+
+    location /api/ {
+        proxy_pass http://10.0.2.4:8000;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_connect_timeout 5s;
+        proxy_read_timeout 20s;
+    }
+
+    location = /healthz {
+        access_log off;
+        return 200 'ok';
+    }
+}
+```
+
+Save and exit: `Ctrl+O`, `Enter`, then `Ctrl+X`.
+
+| Directive | Purpose |
+|---|---|
+| `listen 80` | Accept HTTP requests on port 80 |
+| `root /var/www/html` | Locate compiled frontend files |
+| `try_files` | Serve existing assets or the React entry page |
+| `location /api/` | Identify requests intended for FastAPI |
+| `proxy_pass` | Forward requests to the backend, preserving the `/api/` path |
+| `/healthz` | Check that the Nginx site is responding |
+
+Enable the new site:
+
+```bash
+sudo ln -s /etc/nginx/sites-available/infrapulse /etc/nginx/sites-enabled/infrapulse
+```
+
+If the link already exists, verify it points to the intended configuration. On a fresh dedicated VM, disable the default site:
+
+```bash
+sudo unlink /etc/nginx/sites-enabled/default
+```
+
+If the default link is already absent, skip this command. On shared servers, review existing sites before changing them.
+
+Test the configuration:
+
+```bash
+sudo nginx -t
+```
+
+Expected: `syntax is ok` and `test is successful`. Only if the test succeeds, reload Nginx:
+
+```bash
+sudo systemctl reload nginx
+```
+
+---
+
+## 10. Test the Application
+
+First, verify the web server and API proxy from the frontend VM:
+
+```bash
+curl --fail http://localhost/healthz
+curl --fail http://localhost/api/v1/servers
+```
+
+Expected: `ok` for the first command and JSON data for the second.
+
+Now open your local computer's browser and navigate to:
+
+```text
+http://<FRONTEND_PUBLIC_IP>
+```
+
+The InfraPulse Dashboard should load and display its API connection status, server inventory, CPU, memory and disk utilization, historical graphs, and resource alerts. Live updates require a running metrics collector on the backend side.
+
+---
+
+## 11. Troubleshooting
+
+| Problem | What to check |
+|---|---|
+| Browser cannot connect | Azure public IP, frontend NSG port 80, Nginx service and any Ubuntu firewall |
+| SSH connection fails | Public IP, SSH username/key and NSG port 22 |
+| `npm install` fails | Node version, outbound network connectivity and package registry access |
+| `npm run build` fails | TypeScript errors and installed dependencies |
+| Default Nginx welcome page | Enabled site configuration and `/var/www/html/index.html` |
+| `502 Bad Gateway` | Backend private IP, port 8000, backend process and NSG rules |
+| `503 Service Unavailable` | Backend readiness and database connectivity |
+| Dashboard shows API unavailable | `/api/` reverse proxy, browser developer tools (F12), Nginx logs |
+| Servers show offline | Metrics collector is stopped or samples are stale |
+
+Useful diagnostic commands on the frontend VM:
+
+```bash
+sudo nginx -t
+sudo systemctl status nginx --no-pager
+sudo journalctl -u nginx -n 50 --no-pager
+sudo tail -n 50 /var/log/nginx/error.log
+curl -v http://10.0.2.4:8000/health/ready
+```
+
+If Ubuntu's UFW firewall is active, also verify that it permits HTTP from your intended client. Do not disable network security just to resolve a connectivity problem.
+
+---
+
+## 12. Deploy Future Dashboard Updates
+
+After pushing updated frontend code to GitHub, connect to the frontend VM and run:
+
+```bash
+cd ~/infrapulse-dashboard
+git pull --ff-only
+npm install
+npm run build
+sudo cp -r dist/. /var/www/html/
+sudo nginx -t && sudo systemctl reload nginx
+```
+
+Run each command only after the previous one succeeds. For static-only changes, Nginx does not strictly require a reload, but the test and reload are useful when configuration has changed. Refresh the browser to verify the update.
+
+---
+
+## Final Deployment Checklist
+
+- [ ] Database and backend are running.
+- [ ] Backend readiness endpoint returns `ready` from the frontend VM.
+- [ ] Frontend NSG allows HTTP and SSH from the authorized client IP.
+- [ ] Node.js and npm are installed.
+- [ ] Dashboard repository has been cloned.
+- [ ] `npm install` and `npm run build` succeed.
+- [ ] Static assets are present under `/var/www/html`.
+- [ ] Nginx configuration passes `nginx -t`.
+- [ ] Nginx is active and enabled.
+- [ ] Dashboard opens in the browser and shows API data.
+- [ ] Access is restricted until HTTPS and authentication are configured.
+
+**Verification note:** This guide was prepared against the existing InfraPulse dashboard source and configuration. Expected outputs are acceptance checks, not evidence of a completed live Azure deployment. Azure VMs, disks and networking resources may incur charges.
